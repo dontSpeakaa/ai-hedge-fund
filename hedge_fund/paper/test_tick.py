@@ -1,7 +1,7 @@
 """tick — deploy, advance one session at a time, and halt on failure."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 import yaml
@@ -65,6 +65,12 @@ def _tick(directory, session=None, data=None):
 # deploy
 # ---------------------------------------------------------------------------
 
+def test_deploy_normalizes_a_share_codes(tmp_path, SPEC):
+    spec = SPEC.model_copy(update={"market": "cn", "benchmark": "000300.SH"})
+    directory = deploy("cn", spec, ["600519", "000001.SZ"], root=tmp_path)
+    assert load_deployed(directory).universe == ["600519.SH", "000001.SZ"]
+
+
 def test_deploy_lays_out_the_fund_directory(tmp_path, SPEC):
     directory = deploy("alpha", SPEC, ["aapl", "AAPL", "msft"], root=tmp_path)
     assert directory == tmp_path / "alpha"
@@ -111,6 +117,19 @@ def test_next_session_is_latest_completed_for_a_fresh_fund_and_the_next_one_afte
     assert next_session(data, "SPY", "2024-06-12") is None
     clock("2024-06-03")  # nothing completed inside the series yet
     assert next_session(data, "SPY", None) is None
+
+
+def test_next_session_uses_the_mandate_market_clock(monkeypatch):
+    class Clock:
+        @staticmethod
+        def now(tz):
+            # 17:00 UTC is 01:00 next day in Shanghai but still 13:00 today in New York.
+            return datetime(2024, 6, 12, 17, tzinfo=timezone.utc).astimezone(tz)
+    monkeypatch.setattr(sessions, "datetime", Clock)
+    data = FakeDataClient({**SERIES, "000300.SH": SERIES["SPY"]})
+    assert next_session(data, "000300.SH", None, "cn") == "2024-06-12"
+    assert next_session(data, "000300.SH", "2024-06-11", "cn") == "2024-06-12"
+    assert next_session(data, "000300.SH", "2024-06-11") is None  # US clock: only 06-11 is complete
 
 
 # ---------------------------------------------------------------------------

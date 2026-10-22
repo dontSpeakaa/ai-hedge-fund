@@ -84,7 +84,7 @@ class FundamentalsSnapshot(BaseModel):
         canonical = self.model_dump_json(exclude={"as_of"})
         return hashlib.sha256(canonical.encode()).hexdigest()[:24]
 
-    def render(self, blind: bool = False) -> str:
+    def render(self, blind: bool = False, language: str = "en") -> str:
         """Compact text block for the LLM prompt.
 
         Deliberately date-free (no `as_of`): the prompt cache keys on exact
@@ -103,26 +103,29 @@ class FundamentalsSnapshot(BaseModel):
         that recall rather than removing it (distinctive ratio profiles can
         still give a large company away), and the personas lose
         company-specific knowledge. Live runs render unblinded.
+
+        `language` translates the labels ("zh"); the numbers and the layout
+        are identical, and the English default is byte-for-byte unchanged so
+        existing prompt caches keep hitting.
         """
         if blind:
-            return self._render_blind()
+            return self._render_blind(language)
+        t = _labels(language)
         lines = [
-            f"Company: {self.ticker}"
-            + (f"  |  Sector: {self.sector}" if self.sector else "")
-            + (f"  |  Industry: {self.industry}" if self.industry else ""),
-            "All figures below were publicly filed by their filing dates. "
-            "Treat the most recent filing shown as the present.",
+            t["company"] + f": {self.ticker}"
+            + (f"  |  {t['sector']}: {self.sector}" if self.sector else "")
+            + (f"  |  {t['industry']}: {self.industry}" if self.industry else ""),
+            t["filed_note"],
             "",
-            "Summary:",
-            f"  Market cap (latest filed): {_fmt(self.market_cap_latest)}",
-            f"  ROE avg: {_fmt(self.roe_avg)}  |  Net margin avg: {_fmt(self.net_margin_avg)}",
-            f"  Gross margin trend (latest-oldest): {_fmt(self.gross_margin_trend)}",
-            f"  Book value/share CAGR: {_fmt(self.bvps_cagr)}",
-            f"  Debt/equity (latest): {_fmt(self.debt_to_equity_latest)}",
+            t["summary"],
+            f"  {t['market_cap']}: {_fmt(self.market_cap_latest)}",
+            f"  {t['roe_avg']}: {_fmt(self.roe_avg)}  |  {t['net_margin_avg']}: {_fmt(self.net_margin_avg)}",
+            f"  {t['gross_trend']}: {_fmt(self.gross_margin_trend)}",
+            f"  {t['bvps_cagr']}: {_fmt(self.bvps_cagr)}",
+            f"  {t['debt_equity']}: {_fmt(self.debt_to_equity_latest)}",
             "",
-            "History (trailing-twelve-month periods, newest first):",
-            "period | filed | mktcap | P/E | ROE | gross_m | op_m | net_m | D/E "
-            "| curr | rev_gr | EPS | BVPS | FCF/sh",
+            t["history"],
+            t["header"],
         ]
         for p in self.periods:
             lines.append(
@@ -136,30 +139,27 @@ class FundamentalsSnapshot(BaseModel):
             )
         return "\n".join(lines)
 
-    def _render_blind(self) -> str:
+    def _render_blind(self, language: str = "en") -> str:
         """Backtest prompt: ratios and indexed trends, no identifying dollars."""
+        t = _labels(language)
         oldest = self.periods[-1]
         lines = [
-            f"Company: (withheld)"
-            + (f"  |  Sector: {self.sector}" if self.sector else ""),
-            "Periods are labelled relative to the latest filing (t-0). "
-            "Calendar dates, absolute size and per-share dollar values are withheld; "
-            "per-share figures are indexed to the oldest period shown (= 100). "
-            "Treat t-0 as the present.",
+            t["company"] + f": ({t['withheld']})"
+            + (f"  |  {t['sector']}: {self.sector}" if self.sector else ""),
+            t["blind_note"],
             "",
-            "Summary:",
+            t["summary"],
         ]
         if self.size_percentile is not None:
-            lines.append(f"  Size: {_size_label(self.size_percentile)}")
+            lines.append(f"  {t['size']}: {_size_label(self.size_percentile, language)}")
         lines += [
-            f"  ROE avg: {_fmt(self.roe_avg)}  |  Net margin avg: {_fmt(self.net_margin_avg)}",
-            f"  Gross margin trend (latest-oldest): {_fmt(self.gross_margin_trend)}",
-            f"  Book value/share CAGR: {_fmt(self.bvps_cagr)}",
-            f"  Debt/equity (latest): {_fmt(self.debt_to_equity_latest)}",
+            f"  {t['roe_avg']}: {_fmt(self.roe_avg)}  |  {t['net_margin_avg']}: {_fmt(self.net_margin_avg)}",
+            f"  {t['gross_trend']}: {_fmt(self.gross_margin_trend)}",
+            f"  {t['bvps_cagr']}: {_fmt(self.bvps_cagr)}",
+            f"  {t['debt_equity']}: {_fmt(self.debt_to_equity_latest)}",
             "",
-            "History (trailing-twelve-month periods, newest first):",
-            "period | P/E | ROE | gross_m | op_m | net_m | D/E "
-            "| curr | rev_gr | eps_idx | bvps_idx | fcf_idx | eps_yoy",
+            t["history"],
+            t["blind_header"],
         ]
         for i, p in enumerate(self.periods):
             lines.append(
@@ -242,7 +242,66 @@ def build_snapshot(
 # Private helpers
 # ---------------------------------------------------------------------------
 
-def _size_label(percentile: int) -> str:
+_LABELS = {
+    "en": {
+        "company": "Company",
+        "sector": "Sector",
+        "industry": "Industry",
+        "filed_note": "All figures below were publicly filed by their filing dates. "
+                      "Treat the most recent filing shown as the present.",
+        "summary": "Summary:",
+        "market_cap": "Market cap (latest filed)",
+        "roe_avg": "ROE avg",
+        "net_margin_avg": "Net margin avg",
+        "gross_trend": "Gross margin trend (latest-oldest)",
+        "bvps_cagr": "Book value/share CAGR",
+        "debt_equity": "Debt/equity (latest)",
+        "history": "History (trailing-twelve-month periods, newest first):",
+        "header": "period | filed | mktcap | P/E | ROE | gross_m | op_m | net_m | D/E "
+                  "| curr | rev_gr | EPS | BVPS | FCF/sh",
+        "withheld": "withheld",
+        "blind_note": "Periods are labelled relative to the latest filing (t-0). "
+                      "Calendar dates, absolute size and per-share dollar values are withheld; "
+                      "per-share figures are indexed to the oldest period shown (= 100). "
+                      "Treat t-0 as the present.",
+        "size": "Size",
+        "blind_header": "period | P/E | ROE | gross_m | op_m | net_m | D/E "
+                        "| curr | rev_gr | eps_idx | bvps_idx | fcf_idx | eps_yoy",
+    },
+    "zh": {
+        "company": "公司",
+        "sector": "板块",
+        "industry": "行业",
+        "filed_note": "下列数据均已在各自披露日公开。请把展示的最新一期财报视为当前时点。",
+        "summary": "摘要：",
+        "market_cap": "总市值（最新披露）",
+        "roe_avg": "平均净资产收益率",
+        "net_margin_avg": "平均净利率",
+        "gross_trend": "毛利率趋势（最新-最早）",
+        "bvps_cagr": "每股净资产复合增长率",
+        "debt_equity": "产权比率（最新）",
+        "history": "历史（滚动十二个月，最新在前）：",
+        "header": "期间 | 披露日 | 总市值 | 市盈率 | ROE | 毛利率 | 营业利润率 | 净利率 | 产权比率 "
+                  "| 流动比率 | 营收增速 | 每股收益 | 每股净资产 | 每股自由现金流",
+        "withheld": "已隐去",
+        "blind_note": "期间以最新披露为 t-0 相对标注。日历日期、绝对规模和每股金额均已隐去；"
+                      "每股指标以展示的最早期间为 100 指数化。请把 t-0 视为当前时点。",
+        "size": "规模",
+        "blind_header": "期间 | 市盈率 | ROE | 毛利率 | 营业利润率 | 净利率 | 产权比率 "
+                        "| 流动比率 | 营收增速 | 每股收益指数 | 每股净资产指数 | 自由现金流指数 | 每股收益同比",
+    },
+}
+
+
+def _labels(language: str) -> dict[str, str]:
+    return _LABELS["zh" if language == "zh" else "en"]
+
+
+def _size_label(percentile: int, language: str = "en") -> str:
+    if language == "zh":
+        if percentile <= 0:
+            return "市值低于美股第 5 百分位"
+        return f"市值处于美股第 {percentile} 百分位或以上"
     if percentile <= 0:
         return "market cap below the 5th percentile of US stocks"
     return f"market cap at or above the {percentile}th percentile of US stocks"

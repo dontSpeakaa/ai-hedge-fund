@@ -44,6 +44,67 @@ The app asks for keys the first time it needs them and saves them to `~/.hedge-f
 
 Keys exported in your shell always win over the saved file.
 
+## A-shares (A 股)
+
+A mandate can trade mainland China A-shares by setting `market: cn`. No
+Financial Datasets key is needed: prices and quotes come from Tencent, and
+fundamentals, announcements, and news from Eastmoney's public endpoints. An
+LLM provider key is still required for the investor agents.
+
+```yaml
+schema_version: 2
+name: cn-value-fund
+market: cn                    # us (default) | cn
+language: zh                  # en | zh; cn defaults to zh
+strategies:
+  - name: deep-value
+    blend: {mode: long_only}
+    models:
+      - name: graham
+      - name: buffett
+      - name: munger
+risk:
+  max_position_pct: 0.25
+  max_gross_exposure: 1.0
+capital: 1000000              # CNY
+rebalance: weekly
+benchmark: 000300.SH          # CSI 300; also the backtest's trading-day grid
+```
+
+```bash
+cp hedge_fund/fund/example-cn.yaml ~/.hedge-fund/mandates/
+aihf backtest ~/.hedge-fund/mandates/example-cn.yaml --universe 600519,000001,300750 --start 2024-01-02
+aihf paper create cn-value --mandate ~/.hedge-fund/mandates/example-cn.yaml --universe 600519,000001,300750
+aihf paper tick cn-value
+```
+
+What changes with `market: cn`:
+
+- **Tickers** use `code.exchange` (`600519.SH`, `000001.SZ`, `430047.BJ`). A bare
+  six-digit stock code is accepted and the exchange is inferred; indices need
+  their suffix (`000300.SH`).
+- **Calendar and clock** follow Shanghai (Asia/Shanghai), and the benchmark's
+  bars are the trading-day grid, so exchange holidays need no separate calendar.
+- **Currency** is CNY. Board lots are 100 shares: buys are rounded down to whole
+  lots, while an odd-lot position can always be sold in full.
+- **Fundamentals** are cumulative year-to-date filings. The client derives TTM
+  revenue, profit, EPS, margins, ROE, and growth from annual + current YTD −
+  prior-year YTD, and marks rows `period="ytd"` when that history is missing.
+  Metrics are visible only from their announcement (`NOTICE_DATE`), never the
+  fiscal period end.
+- **News and announcements** come from Eastmoney; there is no insider-trade or
+  analyst-consensus feed, so PEAD abstains on A-shares instead of inventing a
+  surprise.
+- **Minute funds are rejected** for `market: cn`: the A-share day has a midday
+  break (11:30–13:00) that the current bar grid does not model.
+
+With `language: zh` (the default for `market: cn`), the investor agents reason
+and write their theses in Chinese, and fundamentals snapshots use Chinese
+labels. Terminal chrome, CLI help, and log messages remain in English.
+
+See [`hedge_fund/fund/example-cn.yaml`](hedge_fund/fund/example-cn.yaml) for a
+complete mandate.
+
 ## How to Run
 
 ### Interactive app

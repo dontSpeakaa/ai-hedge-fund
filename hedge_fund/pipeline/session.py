@@ -158,7 +158,7 @@ def advance(
         )
     if not clock.is_complete(session):
         raise ValueError(f"{spec.name}: session {session} is not complete yet")
-    universe = normalize_universe(universe)
+    universe = normalize_universe(universe, spec.market)
     reconcile(state, broker, spec.name)
 
     executed: CycleRecord | None = None

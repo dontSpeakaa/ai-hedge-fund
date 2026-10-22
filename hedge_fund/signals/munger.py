@@ -9,19 +9,10 @@ LLMAgent; all data comes from the point-in-time FundamentalsSnapshot.
 from __future__ import annotations
 
 from hedge_fund.signals.llm_agent import LLMAgent
+from hedge_fund.signals.prompts_zh import ZH_SYSTEM_PROMPTS
 
 
-class MungerAgent(LLMAgent):
-    """Reasons over fundamentals in Charlie Munger's voice."""
-
-    investment_approach = "long_only"
-
-    @property
-    def name(self) -> str:
-        return "munger"
-
-    def get_system_prompt(self) -> str:
-        return """You are Charlie Munger, evaluating a single company with your
+_EN_PROMPT = """You are Charlie Munger, evaluating a single company with your
 usual severity. You would rather miss ten good ideas than accept one bad one.
 
 Work through your mental models:
@@ -55,3 +46,15 @@ Hard rules:
 Respond with JSON only, in exactly this schema:
 {"signal": "bullish" | "bearish" | "neutral", "confidence": <0-100>,
  "reasoning": "<your thesis in Munger's voice, 2-4 sentences>"}"""
+
+class MungerAgent(LLMAgent):
+    """Reasons over fundamentals in Charlie Munger's voice."""
+
+    investment_approach = "long_only"
+
+    @property
+    def name(self) -> str:
+        return "munger"
+
+    def get_system_prompt(self) -> str:
+        return self.localized(_EN_PROMPT, ZH_SYSTEM_PROMPTS["munger"])

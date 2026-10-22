@@ -317,8 +317,8 @@ def test_builder_replaces_a_taken_name_only_after_yes_and_only_at_the_end():
 
 
 def test_builder_paper_mode_run_its_first_session_opens_the_approval_step(monkeypatch):
-    monkeypatch.setattr(paper, "FDClient", lambda: Mock(__enter__=lambda s: s, __exit__=lambda s, *a: None))
-    monkeypatch.setattr(paper, "next_session", lambda data, benchmark, last: "2025-01-21")
+    monkeypatch.setattr(paper, "client_for", lambda market, live=False: Mock(__enter__=lambda s: s, __exit__=lambda s, *a: None))
+    monkeypatch.setattr(paper, "next_session", lambda data, benchmark, last, market: "2025-01-21")
     for variable in ("FINANCIAL_DATASETS_API_KEY", "TYPESAFE_API_KEY"):
         monkeypatch.setenv(variable, "x")
     monkeypatch.setenv("HEDGE_FUND_LLM_MODEL", "jev-1.13.0")

@@ -46,7 +46,7 @@ def assess_fund(
     if not clock.is_complete(as_of):
         raise ValueError(f"assessment {as_of} requires incomplete data")
     spec = fund.spec.model_copy(deep=True)
-    universe = normalize_universe(universe)
+    universe = normalize_universe(universe, fund.spec.market)
     marks, skipped = _mark_prices(universe, clock.session_date(as_of), data_client)
 
     tradeable = [t for t in universe if t in marks]
@@ -125,7 +125,7 @@ def execute_decision(
     equity_before = cash_before + sum(p.shares * marks[t] for t, p in held.items())
     if not isfinite(equity_before) or equity_before <= 0:
         raise ValueError(f"{spec.name}: equity on {session} must be finite and positive")
-    orders = build_orders(targets, held, marks, equity_before)
+    orders = build_orders(targets, held, marks, equity_before, spec.market_config.lot_size)
     projected = {t: p.shares for t, p in held.items()}
     for order in orders:
         projected[order.ticker] = projected.get(order.ticker, 0) + (

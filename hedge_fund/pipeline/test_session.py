@@ -172,3 +172,28 @@ def test_analyst_failure_propagates_and_places_no_orders():
     with pytest.raises(ConnectionError):
         advance(fund, FundState.initial(100_000), WEEKDAYS[0], broker, FakeDataClient(SERIES), ["AAPL"])
     assert broker.positions() == {} and broker.cash() == 100_000
+
+
+CN_SERIES = {
+    "600519.SH": {day: 1000.0 + i for i, day in enumerate(WEEKDAYS)},
+    "000300.SH": {day: 3000.0 + i for i, day in enumerate(WEEKDAYS)},
+}
+
+
+def _cn_fund():
+    spec = FundSpec(
+        schema_version=2, name="cn-session",
+        market="cn", benchmark="000300.SH", capital=100_000.0,
+        strategies=[{"name": "solo", "models": [{"name": "a"}], "blend": {"mode": "long_only"}}],
+        risk={"max_position_pct": 1.0, "max_gross_exposure": 1.0},
+    )
+    return Fund(spec, models={"solo": [FakeAnalyst("a", {"600519.SH": 1.0})]})
+
+
+def test_a_share_universe_is_normalized_before_marks_and_orders():
+    fund = _cn_fund()
+    broker = SimBroker(cash=fund.spec.capital)
+    state = FundState.initial(fund.spec.capital)
+    record = advance(fund, state, WEEKDAYS[1], broker, FakeDataClient(CN_SERIES), ["600519"])
+    assert record.universe == ["600519.SH"]
+    assert [p.ticker for p in broker.positions()] == []  # no decision yet

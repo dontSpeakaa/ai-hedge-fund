@@ -366,7 +366,7 @@ def _fund_detail(spec: FundSpec, history: list[dict]) -> Group:
     staff = ", ".join(s.title for s in spec.strategies)
     parts: list = [
         Text(spec.name, style=f"bold {BRIGHT}"),
-        Text(f"{staff}  ·  {cadence_identity(spec)}  ·  ${spec.capital:,.0f}", style=MUTED),
+        Text(f"{staff}  ·  {cadence_identity(spec)}  ·  {spec.market_config.currency_symbol}{spec.capital:,.0f}", style=MUTED),
     ]
     parts.extend(Text(f"{s.title}: {strategy_description(s)}", style=MUTED) for s in spec.strategies)
 

@@ -57,7 +57,7 @@ def deploy(
     """Create paper/<name>/ with an empty ledger and a book seeded with the
     mandate's capital. Returns the fund's directory. Refuses to overwrite."""
     validate_fund_name(name)
-    universe = normalize_universe(universe)
+    universe = normalize_universe(universe, spec.market)
     directory = Path(root) / name
     if directory.exists():
         raise FileExistsError(f"paper fund {name!r} already exists at {directory}")

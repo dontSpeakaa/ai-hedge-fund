@@ -279,8 +279,7 @@ def test_cli_jev_cycle_and_saved_replay(tmp_path, monkeypatch, http, capsys):
     monkeypatch.setenv("HEDGE_FUND_LLM_MODEL", "claude-opus-5")
     monkeypatch.setattr(run, "ensure_mandates_dir", lambda: tmp_path)
     monkeypatch.setattr(paths, "RESEARCH_DIR", tmp_path / "research")
-    monkeypatch.setattr(run, "FDClient", lambda: FinancialFixtures(metrics=_history()))
-    monkeypatch.setattr(run, "CachedDataClient", lambda raw: raw)
+    monkeypatch.setattr(run, "client_for", lambda market, live=False: FinancialFixtures(metrics=_history()))
     monkeypatch.setattr(llm_agent, "PromptCache", lambda: PromptCache(tmp_path / "llm"))
     # A backtest blinds the agents, and a blind prompt sizes the company
     # against the market-equity breakpoints table.

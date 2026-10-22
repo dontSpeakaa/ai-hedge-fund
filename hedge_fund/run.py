@@ -59,10 +59,11 @@ from pathlib import Path
 from rich.console import Console
 
 from hedge_fund.backtesting import backtest_fund, save_result
-from hedge_fund.data import CachedDataClient, FDClient
+from hedge_fund.data import client_for
 from hedge_fund.data.bars import is_intraday
 from hedge_fund.data.sessions import completed_through
 from hedge_fund.fund import Fund, load_spec, normalize_universe
+from hedge_fund.market import get_market
 from hedge_fund.paper import (
     deploy,
     is_running,
@@ -182,12 +183,13 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-_UNIVERSE_HELP = "tickers to trade, comma or space separated, e.g. AAPL,MSFT,NVDA"
+_UNIVERSE_HELP = ("tickers to trade, comma or space separated, e.g. AAPL,MSFT,NVDA "
+                  "or 600519,000001 for A-shares")
 
 
-def _universe(text: str, parser: argparse.ArgumentParser) -> list[str]:
+def _universe(text: str, parser: argparse.ArgumentParser, market: str = "us") -> list[str]:
     try:
-        return normalize_universe(text.replace(",", " ").split())
+        return normalize_universe(text.replace(",", " ").split(), market)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -208,20 +210,19 @@ def _fund_dir(name: str, parser: argparse.ArgumentParser) -> Path:
 # ---------------------------------------------------------------------------
 
 def _backtest(args, parser: argparse.ArgumentParser, console: Console) -> None:
-    universe = _universe(args.universe, parser)
     try:
         spec = load_spec(args.mandate)
     except ValueError as exc:
         parser.error(str(exc))
-    end = args.end or completed_through()
+    universe = _universe(args.universe, parser, spec.market)
+    end = args.end or completed_through(spec.market)
     start = args.start or (_date.fromisoformat(end) - timedelta(weeks=BACKTEST_WEEKS)).isoformat()
     # A backtest blinds the investor agents' prompts (no ticker, industry or
     # calendar dates): the LLM may have been trained on what those companies
     # did over the window, and that memory would otherwise score as skill.
     fund = Fund(spec, blind=True)
 
-    with FDClient() as raw:
-        fd = CachedDataClient(raw)
+    with client_for(spec.market) as fd:
         with console.status(
             f"[cyan]{spec.name}: backtesting {start} → {end} "
             f"({spec.rebalance} rebalance vs {spec.benchmark}) "
@@ -254,19 +255,19 @@ def _backtest(args, parser: argparse.ArgumentParser, console: Console) -> None:
 
 def _paper(args, parser: argparse.ArgumentParser, console: Console) -> None:
     if args.action == "create":
-        universe = _universe(args.universe, parser)
         try:
             validate_fund_name(args.name)
             spec = load_spec(args.mandate)
         except ValueError as exc:
             parser.error(str(exc))
+        universe = _universe(args.universe, parser, spec.market)
         try:
             directory = deploy(args.name, spec, universe, root=PAPER_DIR)
         except FileExistsError as exc:
             parser.error(str(exc))
         console.print(
             f"[bold]{args.name}[/] deployed at {directory}  ·  mandate {spec.name}  ·  "
-            f"{', '.join(universe)}  ·  ${spec.capital:,.0f}  ·  {spec.cadence_label}"
+            f"{', '.join(universe)}  ·  {spec.market_config.money(spec.capital)}  ·  {spec.cadence_label}"
         )
         if spec.is_intraday:
             console.print(f"[dim]next: `aihf paper run {args.name}` to start it ({spec.window.label}), "
@@ -285,8 +286,7 @@ def _paper(args, parser: argparse.ArgumentParser, console: Console) -> None:
 
     if args.action == "tick":
         deployed = load_deployed(directory)
-        with FDClient() as raw:
-            fd = CachedDataClient(raw)
+        with client_for(deployed.spec.market) as fd:
             verb = "running the latest session again" if args.again else "advancing one session"
             with console.status(
                 f"[cyan]{deployed.name}: {verb} over {', '.join(deployed.universe)}…", spinner="dots",
@@ -294,7 +294,7 @@ def _paper(args, parser: argparse.ArgumentParser, console: Console) -> None:
                 record = (redo(directory, fd, build_fund=None) if args.again
                           else tick(directory, fd, session=args.session))
         print(record.model_dump_json(indent=2))
-        console.print(_tick_summary(deployed.name, record))
+        console.print(_tick_summary(deployed.name, record, deployed.spec.market))
         return
 
     if args.action == "run":
@@ -307,10 +307,10 @@ def _paper(args, parser: argparse.ArgumentParser, console: Console) -> None:
             detail = fields.get("reason") or (f"{fields.get('bars_skipped')} bars skipped" if "bars_skipped" in fields else "")
             console.print(f"[yellow]{kind}[/] {fields.get('from') or 'start'} → {fields.get('to')}  {detail}".rstrip())
 
-        with FDClient() as raw:
+        with client_for(spec.market, live=True) as data:
             try:
-                serve(directory, CachedDataClient(raw, live=True),
-                      on_record=lambda record: console.print(_tick_summary(deployed.name, record)),
+                serve(directory, data,
+                      on_record=lambda record: console.print(_tick_summary(deployed.name, record, spec.market)),
                       on_event=_event)
             except RuntimeError as exc:  # already running
                 console.print(f"[red]{exc}[/]")
@@ -368,20 +368,21 @@ def _status_line(directory: Path) -> str:
     ledger = Ledger(directory)
     latest = ledger.latest()
     halted = ledger.halted()
+    money = deployed.spec.market_config.money
     if latest is None:
-        state = f"not started  ·  ${deployed.spec.capital:,.0f}"
+        state = f"not started  ·  {money(deployed.spec.capital)}"
     else:
         ret = latest.nav / deployed.spec.capital - 1
         state = (f"{len(ledger.sessions())} sessions  ·  last {latest.session}  ·  "
-                 f"NAV ${latest.nav:,.2f} ({ret:+.2%})")
+                 f"NAV {money(latest.nav)} ({ret:+.2%})")
     flag = f"  ·  HALTED: {halted}" if halted else ""
     running = "  ·  running" if is_running(directory) else ""
     return (f"{deployed.name:<18} {deployed.spec.name}  ·  {' '.join(deployed.universe)}  ·  "
             f"{deployed.spec.cadence_label}{running}  ·  {state}{flag}")
 
 
-def _tick_summary(name: str, record: SessionRecord) -> str:
-    parts = [f"[bold]{name}[/] · session {record.session} · NAV ${record.nav:,.2f}"]
+def _tick_summary(name: str, record: SessionRecord, market: str = "us") -> str:
+    parts = [f"[bold]{name}[/] · session {record.session} · NAV {get_market(market).money(record.nav)}"]
     if record.executed is not None:
         parts.append(f"executed {len(record.executed.orders)} orders from {record.executed.as_of}")
     if record.decision is not None:

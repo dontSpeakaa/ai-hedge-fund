@@ -17,9 +17,9 @@ from textual.widgets import ContentSwitcher, Footer, OptionList, Static
 from textual.widgets.option_list import Option
 
 from hedge_fund import paths
-from hedge_fund.data import CachedDataClient, FDClient, PriceSnapshot
+from hedge_fund.data import client_for, PriceSnapshot
 from hedge_fund.data.bars import is_intraday
-from hedge_fund.fund import FundSpec
+from hedge_fund.fund import build_alpha_model, FundSpec
 from hedge_fund.llm import make_llm
 from hedge_fund.paper import (
     assessment_dates,
@@ -210,11 +210,12 @@ class PaperScreen(Screen):
             self._populate(snap.deployed.name)
             return
         if snap.state is not None and snap.state.positions:
-            self._fetch_quotes(snap.deployed.name, sorted(snap.state.positions))
+            self._fetch_quotes(snap.deployed.name, sorted(snap.state.positions),
+                               snap.deployed.spec.market)
 
     @work(thread=True, group="quotes", exclusive=True)
-    def _fetch_quotes(self, name: str, tickers: list[str]) -> None:
-        quotes = fetch_snapshots(tickers)
+    def _fetch_quotes(self, name: str, tickers: list[str], market: str) -> None:
+        quotes = fetch_snapshots(tickers, market)
         if quotes:
             self.app.call_from_thread(self._quotes_arrived, name, quotes)
 
@@ -479,8 +480,7 @@ class RunSessionScreen(Screen):
             spec = deployed.spec
             ledger = Ledger(directory)
             state = ledger.replay(spec.capital)
-            with FDClient() as raw:
-                data = CachedDataClient(raw)
+            with client_for(spec.market) as data:
                 if self._redo:
                     if state.last_session is None:
                         raise NothingDue("no session recorded yet, nothing to run again")
@@ -489,7 +489,7 @@ class RunSessionScreen(Screen):
                     due = state.last_session
                     state = ledger.replay(spec.capital, before=due)
                 else:
-                    due = next_session(data, spec.benchmark, state.last_session)
+                    due = next_session(data, spec.benchmark, state.last_session, spec.market)
                     if due is None:  # the close slipped out from under the approval step
                         raise NothingDue(f"no completed {spec.benchmark} session after {state.last_session}")
                 dates = assessment_dates(state, due, spec)
@@ -509,10 +509,10 @@ class RunSessionScreen(Screen):
             cls = ALPHA_MODEL_REGISTRY[agent_name]  # own instance per thread
             # Only LLM agents have anything to stream; a quant model carries
             # no client and simply runs.
-            model = (cls(llm=make_llm(on_token=desk.feed))
-                     if issubclass(cls, LLMAgent) else cls())
-            with FDClient() as raw:
-                fd = CachedDataClient(raw)
+            model_spec = next(m for s in spec.strategies for m in s.models if m.name == agent_name)
+            llm = make_llm(on_token=desk.feed) if issubclass(cls, LLMAgent) else None
+            model = build_alpha_model(spec, model_spec, llm=llm)
+            with client_for(spec.market) as fd:
                 for as_of in dates:
                     for ticker in universe:
                         desk.begin(ticker)
@@ -647,7 +647,7 @@ class SessionsScreen(Screen):
         staff = ", ".join(s.title for s in spec.strategies)
         self.query_one("#pf-head", Static).update(Group(
             Text.assemble((snap.deployed.name, f"bold {BRIGHT}"), ("  ·  paper", MUTED)),
-            Text(f"{staff}  ·  {cadence_identity(spec)}  ·  ${spec.capital:,.0f}"
+            Text(f"{staff}  ·  {cadence_identity(spec)}  ·  {spec.market_config.currency_symbol}{spec.capital:,.0f}"
                  f"  ·  {' '.join(snap.deployed.universe)}", style=MUTED),
         ))
         self.query_one("#pf-status", Static).update(snap.status())
@@ -763,6 +763,6 @@ def _resolve_next_session(directory: Path) -> tuple[DeployedFund, FundState, str
     due. The one place the confirm modal touches the network."""
     deployed = load_deployed(directory)
     state = Ledger(directory).replay(deployed.spec.capital)
-    with FDClient() as raw:
-        due = next_session(CachedDataClient(raw), deployed.spec.benchmark, state.last_session)
+    with client_for(deployed.spec.market) as data:
+        due = next_session(data, deployed.spec.benchmark, state.last_session, deployed.spec.market)
     return deployed, state, due

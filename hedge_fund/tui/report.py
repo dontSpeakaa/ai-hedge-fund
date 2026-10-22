@@ -49,6 +49,16 @@ _DECIDED = "d:"
 _TAPE_ROWS = 12
 
 
+def _symbol(record: object) -> str:
+    """The currency a ledger record was denominated in, inferred from its
+    benchmark. Session records carry the benchmark; decision records carry
+    the serialized mandate."""
+    benchmark = getattr(record, "benchmark", None)
+    if not benchmark:
+        benchmark = getattr(getattr(record, "spec", None), "benchmark", "")
+    return "¥" if str(benchmark or "").upper().endswith((".SH", ".SZ", ".BJ")) else "$"
+
+
 def verdict(signal: Signal) -> tuple[str, str, str]:
     """A signal's verdict as (glyph, word, colour) — one vocabulary, used by
     both the browser's list and its detail pane."""
@@ -310,11 +320,12 @@ def signal_detail(record: CycleRecord | DecisionRecord, si: int, sj: int) -> Gro
 
 
 def portfolio_detail(record: CycleRecord) -> Group:
+    symbol = _symbol(record)
     target_net = record.equity_before * sum(record.final_weights.values())
     actual_net = sum(shares * record.marks[ticker] for ticker, shares in record.positions.items())
     details = [
         Text("PORTFOLIO", style=f"bold {BRIGHT}"),
-        Text(f"Target net ${target_net:+,.2f} · Actual net ${actual_net:+,.2f} · Difference ${actual_net - target_net:+,.2f}", style=MUTED),
+        Text(f"Target net {symbol}{target_net:+,.2f} · Actual net {symbol}{actual_net:+,.2f} · Difference {symbol}{actual_net - target_net:+,.2f}", style=MUTED),
     ]
     if any(s.blend.mode == "dollar_neutral" for s in record.spec.strategies):
         details.append(Text("Dollar-neutral rules apply to strategy targets. Whole-share holdings can differ; other strategies can add net exposure.", style=MUTED))
@@ -339,7 +350,7 @@ def portfolio_detail(record: CycleRecord) -> Group:
         tone = GREEN if value >= 0 else RED
         table.add_row(
             ticker, side, f"{shares:+d}",
-            Text(f"${value:+,.0f}", style=tone),
+            Text(f"{symbol}{value:+,.0f}", style=tone),
             Text(f"{value / record.nav:+.1%}", style=tone),
         )
     return Group(*details, Text(""), table)
@@ -353,9 +364,10 @@ def book_summary(record: CycleRecord | SessionRecord) -> Text:
                     for t, s in record.positions.items())
     gross = (long_val - short_val) / record.nav
     net = (long_val + short_val) / record.nav
+    symbol = _symbol(record)
     summary = Text()
-    summary.append(f"NAV ${record.nav:,.2f}", style=f"bold {BRIGHT}")
-    summary.append(f"   Cash ${record.cash:,.0f}", style=CYAN)
+    summary.append(f"NAV {symbol}{record.nav:,.2f}", style=f"bold {BRIGHT}")
+    summary.append(f"   Cash {symbol}{record.cash:,.0f}", style=CYAN)
     summary.append(f"   Gross {gross:.0%}   Net {net:+.0%}", style=MUTED)
     return summary
 
@@ -405,12 +417,13 @@ def session_overview(record: SessionRecord) -> Group:
         parts.append(Text.assemble(
             ("EXECUTED  ", f"bold {GREEN}"),
             (f"decision from {x.as_of} · {len(x.orders)} orders · {len(x.fills)} fills", MUTED)))
+        symbol = _symbol(record)
         for fill in x.fills[:8]:
             tone = GREEN if fill.side == "buy" else RED
             parts.append(Text.assemble(
                 (f"  {fill.side.upper():<4} ", f"bold {tone}"),
                 (f"{fill.quantity:,} {fill.ticker}", TEXT),
-                (f" @ ${fill.price:,.2f}", MUTED)))
+                (f" @ {symbol}{fill.price:,.2f}", MUTED)))
         if len(x.fills) > 8:
             parts.append(Text(f"  … {len(x.fills) - 8} more", style=MUTED))
         parts.append(Text(""))
@@ -433,7 +446,7 @@ def session_overview(record: SessionRecord) -> Group:
     return Group(*parts)
 
 
-def tape_table(tape: list[tuple[str, Fill, int]]) -> Table:
+def tape_table(tape: list[tuple[str, Fill, int]], symbol: str = "$") -> Table:
     """The running trade tape: every fill of the replay so far, newest first.
     Each row is one execution — date, ticker, side, size, price, notional —
     and the book it left behind (LONG/SHORT/FLAT that ticker)."""
@@ -456,8 +469,8 @@ def tape_table(tape: list[tuple[str, Fill, int]]) -> Table:
             Text(fill.ticker, style=f"bold {CYAN}"),
             side,
             f"{fill.quantity:,}",
-            f"@ ${fill.price:,.2f}",
-            Text(f"${fill.quantity * fill.price:,.0f}", style=TEXT),
+            f"@ {symbol}{fill.price:,.2f}",
+            Text(f"{symbol}{fill.quantity * fill.price:,.0f}", style=TEXT),
             book,
         )
     if len(tape) > _TAPE_ROWS:
@@ -528,6 +541,7 @@ def _session_book(record: SessionRecord) -> Group:
     ]
     if not record.positions:
         return Group(*head, Text("flat — no positions", style=MUTED))
+    symbol = _symbol(record)
     table = Table(box=box.SQUARE, header_style="bold", border_style="#1f2b25")
     table.add_column("Ticker", style=f"bold {CYAN}")
     table.add_column("Side", justify="center")
@@ -541,7 +555,7 @@ def _session_book(record: SessionRecord) -> Group:
                 else Text("SHORT", style=f"bold {RED}"))
         tone = GREEN if value >= 0 else RED
         table.add_row(ticker, side, f"{shares:+d}",
-                      Text(f"${value:+,.0f}", style=tone),
+                      Text(f"{symbol}{value:+,.0f}", style=tone),
                       Text(f"{value / record.nav:+.1%}", style=tone))
     return Group(*head, Text(""), table)
 
@@ -599,13 +613,14 @@ def _orders_detail(record: CycleRecord) -> Group:
     table.add_column("Quantity", justify="right")
     table.add_column("Ticker", style=f"bold {CYAN}")
     table.add_column("Price", justify="right")
+    symbol = _symbol(record)
     for o in record.orders:
         tone = f"bold {GREEN}" if o.side == "buy" else f"bold {RED}"
         table.add_row(
             Text(o.side.upper(), style=tone),
             Text(f"{o.quantity:,}", style=tone),
             o.ticker,
-            f"${o.price:,.2f}",
+            f"{symbol}{o.price:,.2f}",
         )
     return Group(Text("ORDERS", style=f"bold {BRIGHT}"), Text(""), table)
 

@@ -38,8 +38,7 @@ def offline(tmp_path, monkeypatch):
     monkeypatch.setattr(run, "ensure_mandates_dir", lambda: tmp_path)
     monkeypatch.setattr(run, "Fund", build_fund)
     monkeypatch.setattr(tick_module, "Fund", build_fund)
-    monkeypatch.setattr(run, "FDClient", OfflineClient)
-    monkeypatch.setattr(run, "CachedDataClient", lambda client, **kwargs: client)
+    monkeypatch.setattr(run, "client_for", lambda market, live=False: OfflineClient())
     monkeypatch.setattr(run, "PAPER_DIR", tmp_path / "paper")
     monkeypatch.setattr(paths, "RESEARCH_DIR", tmp_path / "research")
 
@@ -85,7 +84,7 @@ def test_cli_rejects_invalid_configuration_before_clients(tmp_path, monkeypatch,
     monkeypatch.setattr(run, "apply_credentials", lambda: None)
     monkeypatch.setattr(run, "ensure_mandates_dir", lambda: tmp_path)
     monkeypatch.setattr(run, "Fund", forbidden)
-    monkeypatch.setattr(run, "FDClient", forbidden)
+    monkeypatch.setattr(run, "client_for", forbidden)
     monkeypatch.setattr(run, "deploy", forbidden)
     monkeypatch.setattr(run, "PAPER_DIR", tmp_path / "paper")
     argv = (["backtest", str(path), "--universe", "AAPL"] if command == "backtest"

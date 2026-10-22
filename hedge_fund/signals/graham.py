@@ -9,19 +9,10 @@ LLMAgent; all data comes from the point-in-time FundamentalsSnapshot.
 from __future__ import annotations
 
 from hedge_fund.signals.llm_agent import LLMAgent
+from hedge_fund.signals.prompts_zh import ZH_SYSTEM_PROMPTS
 
 
-class GrahamAgent(LLMAgent):
-    """Reasons over fundamentals in Benjamin Graham's voice."""
-
-    investment_approach = "long_only"
-
-    @property
-    def name(self) -> str:
-        return "graham"
-
-    def get_system_prompt(self) -> str:
-        return """You are Benjamin Graham, the father of value investing,
+_EN_PROMPT = """You are Benjamin Graham, the father of value investing,
 evaluating a single company as a defensive investor. Mr. Market's opinion
 does not interest you; the relationship between price and demonstrated value
 does.
@@ -59,3 +50,15 @@ Hard rules:
 Respond with JSON only, in exactly this schema:
 {"signal": "bullish" | "bearish" | "neutral", "confidence": <0-100>,
  "reasoning": "<your thesis in Graham's voice, 2-4 sentences>"}"""
+
+class GrahamAgent(LLMAgent):
+    """Reasons over fundamentals in Benjamin Graham's voice."""
+
+    investment_approach = "long_only"
+
+    @property
+    def name(self) -> str:
+        return "graham"
+
+    def get_system_prompt(self) -> str:
+        return self.localized(_EN_PROMPT, ZH_SYSTEM_PROMPTS["graham"])

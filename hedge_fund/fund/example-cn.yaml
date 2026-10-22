@@ -1,0 +1,28 @@
+# 一个 A 股（沪深）基金示例。字段与 example.yaml 相同，多了 market 和
+# language：market 决定交易日历、币种、一手股数和默认基准；language
+# 决定分析师使用的语言（A 股默认中文）。
+#
+#   aihf backtest ~/.hedge-fund/mandates/example-cn.yaml \
+#     --universe 600519,000001,300750 --start 2024-01-02
+#   aihf paper create cn-value --mandate ~/.hedge-fund/mandates/example-cn.yaml \
+#     --universe 600519,000001,300750
+#   aihf paper tick cn-value
+#
+schema_version: 2
+name: cn-value-fund
+market: cn                    # us | cn
+language: zh                  # en | zh；cn 默认 zh
+strategies:
+  - name: deep-value
+    blend: {mode: long_only}
+    models:
+      - name: graham
+        weight: 2.0
+      - name: buffett
+      - name: munger
+risk:
+  max_position_pct: 0.25
+  max_gross_exposure: 1.0
+capital: 1000000              # 人民币
+rebalance: weekly             # A 股暂不支持 minute
+benchmark: 000300.SH          # 沪深300；也是回测的交易日网格

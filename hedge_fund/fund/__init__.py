@@ -2,6 +2,7 @@
 
 from hedge_fund.fund.spec import (
     BlendPolicy,
+    build_alpha_model,
     Cadence,
     custom_strategy,
     format_interval,
@@ -20,6 +21,7 @@ from hedge_fund.fund.storage import discover_funds, save_spec, SavedFund
 
 __all__ = [
     "BlendPolicy",
+    "build_alpha_model",
     "Cadence",
     "Fund",
     "FundSpec",

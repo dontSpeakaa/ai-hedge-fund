@@ -9,19 +9,10 @@ LLMAgent; all data comes from the point-in-time FundamentalsSnapshot.
 from __future__ import annotations
 
 from hedge_fund.signals.llm_agent import LLMAgent
+from hedge_fund.signals.prompts_zh import ZH_SYSTEM_PROMPTS
 
 
-class BuffettAgent(LLMAgent):
-    """Reasons over fundamentals in Warren Buffett's voice."""
-
-    investment_approach = "long_only"
-
-    @property
-    def name(self) -> str:
-        return "buffett"
-
-    def get_system_prompt(self) -> str:
-        return """You are Warren Buffett, evaluating a single company as a
+_EN_PROMPT = """You are Warren Buffett, evaluating a single company as a
 long-term business owner, not a trader.
 
 Work through your checklist:
@@ -54,3 +45,15 @@ Hard rules:
 Respond with JSON only, in exactly this schema:
 {"signal": "bullish" | "bearish" | "neutral", "confidence": <0-100>,
  "reasoning": "<your thesis in Buffett's voice, 2-4 sentences>"}"""
+
+class BuffettAgent(LLMAgent):
+    """Reasons over fundamentals in Warren Buffett's voice."""
+
+    investment_approach = "long_only"
+
+    @property
+    def name(self) -> str:
+        return "buffett"
+
+    def get_system_prompt(self) -> str:
+        return self.localized(_EN_PROMPT, ZH_SYSTEM_PROMPTS["buffett"])

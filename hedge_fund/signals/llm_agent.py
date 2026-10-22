@@ -52,9 +52,17 @@ class LLMAgent(AlphaModel):
         cache: PromptCache | None = None,
         blind: bool = False,
         breakpoints: MEBreakpoints | None = None,
+        language: str = "en",
+        market: str = "us",
     ) -> None:
+        if language not in ("en", "zh"):
+            raise ValueError(f"language must be 'en' or 'zh', got {language!r}")
+        if market not in ("us", "cn"):
+            raise ValueError(f"market must be 'us' or 'cn', got {market!r}")
         self._llm = llm if llm is not None else make_llm()
         self._cache = cache if cache is not None else PromptCache()
+        self._language = language
+        self._market = market
         # Blind prompts withhold the ticker, industry, calendar dates and
         # dollar values so a backtest can't lean on what the LLM remembers
         # about the company (FundamentalsSnapshot.render). Size survives only
@@ -129,6 +137,15 @@ class LLMAgent(AlphaModel):
     # Subclass surface
     # ------------------------------------------------------------------
 
+    @property
+    def language(self) -> str:
+        """The language this agent reasons and writes in."""
+        return self._language
+
+    def localized(self, english: str, chinese: str) -> str:
+        """Pick the persona prompt for this agent's language."""
+        return chinese if self._language == "zh" else english
+
     def get_system_prompt(self) -> str:
         """The persona — every subclass must define its voice."""
         raise NotImplementedError(f"{type(self).__name__} must define get_system_prompt()")
@@ -141,7 +158,9 @@ class LLMAgent(AlphaModel):
         implicit interface (ticker/as_of/content_hash/render) into a
         Protocol — not before."""
         breakpoints = None
-        if self._blind:
+        # The breakpoints table describes the US market-cap distribution;
+        # applying it to A-share caps would place them on the wrong curve.
+        if self._blind and self._market == "us":
             if self._breakpoints is None:
                 self._breakpoints = shared_breakpoints()
             breakpoints = self._breakpoints
@@ -149,7 +168,7 @@ class LLMAgent(AlphaModel):
 
     def build_user_prompt(self, snapshot: FundamentalsSnapshot) -> str:
         """Default user prompt: the rendered snapshot. Override to enrich."""
-        return snapshot.render(blind=self._blind)
+        return snapshot.render(blind=self._blind, language=self._language)
 
     # ------------------------------------------------------------------
     # Private helpers

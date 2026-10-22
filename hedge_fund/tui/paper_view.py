@@ -20,7 +20,8 @@ from rich.table import Table
 from rich.text import Text
 
 from hedge_fund.backtesting import performance_metrics
-from hedge_fund.data import FDClient, FDClientError, PriceSnapshot
+from hedge_fund.data import CNClientError, FDClientError, PriceSnapshot, raw_client
+from hedge_fund.market import get_market
 from hedge_fund.data.bars import bar_time, bars_per_day, is_intraday, next_bar
 from hedge_fund.data.sessions import NEW_YORK
 from hedge_fund.fund import FundSpec
@@ -243,17 +244,19 @@ def live_rows(
     positions = snap.state.positions
     if any(t not in quotes for t in positions):
         return []
+    market = get_market(snap.deployed.spec.market)
     value = snap.state.cash + sum(shares * quotes[t].price for t, shares in positions.items())
     change = value / snap.nav - 1 if snap.nav else 0.0
-    newest = max(_quote_time(quotes[t]) for t in positions)
-    today = today or datetime.now(NEW_YORK).date().isoformat()
+    newest = max(_quote_time(quotes[t], market.timezone) for t in positions)
+    today = today or datetime.now(market.timezone).date().isoformat()
     stale = newest.date().isoformat() < today
     tone = MUTED if stale else GREEN if change >= 0 else RED
     when = newest.strftime("%b %-d %H:%M") if stale else newest.strftime("%H:%M")
+    zone = "ET" if market.id == "us" else "CST"
     return [("Live", Text.assemble(
-        (f"${value:,.0f}", MUTED if stale else TEXT),
+        (f"{market.currency_symbol}{value:,.0f}", MUTED if stale else TEXT),
         (f"   {change:+.2%}", tone),
-        (f"   as of {when} ET", MUTED)))]
+        (f"   as of {when} {zone}", MUTED)))]
 
 
 def paper_detail(
@@ -269,7 +272,7 @@ def paper_detail(
     staff = ", ".join(s.title for s in spec.strategies)
     parts: list = [
         Text.assemble((snap.deployed.name, f"bold {BRIGHT}"), "   ", snap.badge()),
-        Text(f"{staff} · {cadence_identity(spec)} · ${spec.capital:,.0f} · {' '.join(snap.deployed.universe)}",
+        Text(f"{staff} · {cadence_identity(spec)} · {spec.market_config.currency_symbol}{spec.capital:,.0f} · {' '.join(snap.deployed.universe)}",
              style=MUTED),
         Text(""),
     ]
@@ -286,7 +289,7 @@ def paper_detail(
         n = len(snap.records)
         ret, bench_ret = m.total_return_pct, m.benchmark_return_pct
         parts += [Text(""), _section("PERFORMANCE"), _facts([
-            ("Value", f"${snap.nav:,.0f}"),
+            ("Value", f"{spec.market_config.currency_symbol}{snap.nav:,.0f}"),
             ("Return", Text.assemble((f"{ret:+.1%}", GREEN if ret >= 0 else RED),
                                      (f"   {spec.benchmark} {bench_ret:+.1%}", MUTED))),
             ("Since", Text(f"{snap.records[0].session} · {n} {'session' if n == 1 else 'sessions'}"
@@ -306,19 +309,21 @@ def paper_detail(
     return Group(*parts)
 
 
-def fetch_snapshots(tickers: list[str]) -> dict[str, PriceSnapshot]:
+def fetch_snapshots(tickers: list[str], market: str = "us") -> dict[str, PriceSnapshot]:
     """One real-time quote per ticker, fetched together. Empty when there is
     no key to ask with or the API refuses: the pane then shows the last close
     and nothing else, which is the honest fallback."""
-    if not tickers or not os.environ.get("FINANCIAL_DATASETS_API_KEY"):
+    if not tickers:
+        return {}
+    if get_market(market).id == "us" and not os.environ.get("FINANCIAL_DATASETS_API_KEY"):
         return {}
     quotes: dict[str, PriceSnapshot] = {}
     try:
-        with FDClient() as fd, ThreadPoolExecutor(max_workers=min(8, len(tickers))) as pool:
+        with raw_client(market) as fd, ThreadPoolExecutor(max_workers=min(8, len(tickers))) as pool:
             for ticker, snapshot in zip(tickers, pool.map(fd.get_snapshot, tickers)):
                 if snapshot is not None:
                     quotes[ticker] = snapshot
-    except FDClientError:
+    except (FDClientError, CNClientError, RuntimeError, OSError):
         return {}
     return quotes
 
@@ -403,9 +408,9 @@ def _facts(rows: list[tuple[str, Text | str]]) -> Table:
     return grid
 
 
-def _quote_time(snapshot: PriceSnapshot) -> datetime:
-    """The quote's trade time in New York."""
-    return datetime.fromisoformat(snapshot.time.replace("Z", "+00:00")).astimezone(NEW_YORK)
+def _quote_time(snapshot: PriceSnapshot, timezone=NEW_YORK) -> datetime:
+    """The quote's trade time in the market's timezone."""
+    return datetime.fromisoformat(snapshot.time.replace("Z", "+00:00")).astimezone(timezone)
 
 
 def _next_weekday(after: str) -> str:

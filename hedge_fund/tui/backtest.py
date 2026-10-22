@@ -36,8 +36,14 @@ from hedge_fund.backtesting import (
 )
 from hedge_fund.backtesting.research import last_universe, save_result
 from hedge_fund.brokers import Fill
-from hedge_fund.data import CachedDataClient, FDClient
-from hedge_fund.fund import discover_funds, Fund, FundSpec, normalize_universe
+from hedge_fund.data import client_for
+from hedge_fund.fund import (
+    build_alpha_model,
+    discover_funds,
+    Fund,
+    FundSpec,
+    normalize_universe,
+)
 from hedge_fund.pipeline import CycleRecord, mark_lookback_start
 from hedge_fund.scorecard import score
 from hedge_fund.signals import ALPHA_MODEL_REGISTRY, LLMAgent
@@ -204,7 +210,8 @@ class BacktestScreen(Screen):
             return
         try:
             universe = normalize_universe(
-                self.query_one("#bt-tickers", Input).value.replace(",", " ").split())
+                self.query_one("#bt-tickers", Input).value.replace(",", " ").split(),
+                self._spec.market)
         except ValueError:
             self.notify("Enter at least one ticker.", severity="error")
             self.query_one("#bt-tickers", Input).focus()
@@ -238,8 +245,8 @@ class BacktestScreen(Screen):
              universe: list[str]) -> None:
         app = self.app
         try:
-            with FDClient() as raw:
-                schedule = build_schedule(CachedDataClient(raw), spec.benchmark, start, end, spec.rebalance)
+            with client_for(spec.market) as fd:
+                schedule = build_schedule(fd, spec.benchmark, start, end, spec.rebalance, spec.market)
             grid = schedule.assessment_dates
             app.call_from_thread(self._begin_warm, spec, universe, len(grid))
             self._warm_market(spec, universe, grid)
@@ -255,8 +262,8 @@ class BacktestScreen(Screen):
             def valuation(i: int, n: int, value: DailyValuation) -> None:
                 app.call_from_thread(self._board_valuation, value)
 
-            with FDClient() as raw:
-                result = backtest_fund(fund, start, end, CachedDataClient(raw),
+            with client_for(spec.market) as fd:
+                result = backtest_fund(fund, start, end, fd,
                                        universe, on_cycle=tick, on_valuation=valuation)
 
             path = save_result(result)  # where `aihf backtest` saves too; the mandate picker reads it
@@ -281,8 +288,7 @@ class BacktestScreen(Screen):
         bar = self.query_one("#warm-progress", ProgressBar)
 
         def prefetch(ticker: str, dates: list[str]) -> None:
-            with FDClient() as raw:  # own client per task (requests isn't shared-safe)
-                fd = CachedDataClient(raw)
+            with client_for(spec.market) as fd:  # own client per task (requests isn't shared-safe)
                 if has_agents:
                     fd.get_company_facts(ticker)
                 for as_of in dates:
@@ -310,10 +316,9 @@ class BacktestScreen(Screen):
 
         def warm(agent_name: str) -> None:
             who = display[agent_name]
-            cls = ALPHA_MODEL_REGISTRY[agent_name]  # own instance per thread
-            model = cls(blind=True) if issubclass(cls, LLMAgent) else cls()
-            with FDClient() as raw:
-                fd = CachedDataClient(raw)
+            model_spec = next(m for s in spec.strategies for m in s.models if m.name == agent_name)
+            model = build_alpha_model(spec, model_spec, blind=True)  # own instance per thread
+            with client_for(spec.market) as fd:
                 for as_of in grid:
                     for ticker in universe:
                         app.call_from_thread(
@@ -392,7 +397,7 @@ class BacktestScreen(Screen):
         for fill in record.fills:
             self._tape.append((record.execution_as_of or record.as_of, fill,
                                record.positions.get(fill.ticker, 0)))
-        self.query_one("#tape", Static).update(tape_table(self._tape))
+        self.query_one("#tape", Static).update(tape_table(self._tape, self._spec.market_config.currency_symbol))
 
     def _board_valuation(self, value: DailyValuation) -> None:
         assert self._spec is not None

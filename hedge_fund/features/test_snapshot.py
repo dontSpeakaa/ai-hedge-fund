@@ -257,3 +257,31 @@ def test_blind_render_is_opt_in():
     snap = build_snapshot("TEST", "2025-01-15", MockDataClient(metrics=_history()))
     assert snap.render() == snap.render(blind=False)
     assert "Company: TEST" in snap.render()
+
+
+def test_zh_render_translates_labels_but_keeps_the_numbers():
+    snap = build_snapshot("TEST", "2025-01-15", MockDataClient(metrics=_history()))
+    text = snap.render(language="zh")
+    assert "公司: TEST" in text
+    assert "摘要：" in text
+    assert "总市值（最新披露）" in text
+    assert "历史（滚动十二个月，最新在前）：" in text
+    assert "Company:" not in text
+    assert "Summary:" not in text
+    # Numbers and the period rows are byte-identical to the English render.
+    zh_rows = [line for line in text.splitlines() if line.startswith("2024-")]
+    en_rows = [line for line in snap.render().splitlines() if line.startswith("2024-")]
+    assert zh_rows == en_rows
+
+
+def test_render_defaults_to_english():
+    snap = build_snapshot("TEST", "2025-01-15", MockDataClient(metrics=_history()))
+    assert snap.render() == snap.render(language="en")
+
+
+def test_zh_blind_render_has_no_english_labels():
+    snap = build_snapshot("TEST", "2025-01-15", MockDataClient(metrics=_history()))
+    text = snap.render(blind=True, language="zh")
+    assert "公司: (已隐去)" in text
+    assert "股票代码" not in text
+    assert "Summary" not in text

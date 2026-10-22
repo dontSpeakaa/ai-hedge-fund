@@ -304,6 +304,24 @@ def test_llm_personas_share_the_contract(tmp_path):
         assert '"signal"' in prompt and '"confidence"' in prompt  # the schema
 
 
+def test_llm_personas_speak_chinese_when_asked(tmp_path):
+    """The JSON contract stays English; the voice and reasoning become Chinese."""
+    from hedge_fund.signals import ALPHA_MODEL_REGISTRY, LLMAgent
+
+    for cls in ALPHA_MODEL_REGISTRY.values():
+        if not issubclass(cls, LLMAgent):
+            continue
+        prompt = cls(llm=FakeLLM(), cache=PromptCache(tmp_path / "llm"), language="zh").get_system_prompt()
+        assert "只输出 JSON" in prompt
+        assert '"signal"' in prompt and '"confidence"' in prompt
+        assert "You are" not in prompt
+
+
+def test_invalid_agent_language_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="language"):
+        BuffettAgent(llm=FakeLLM(), cache=PromptCache(tmp_path / "llm"), language="fr")
+
+
 # ---------------------------------------------------------------------------
 # extract_json
 # ---------------------------------------------------------------------------

@@ -9,19 +9,10 @@ LLMAgent; all data comes from the point-in-time FundamentalsSnapshot.
 from __future__ import annotations
 
 from hedge_fund.signals.llm_agent import LLMAgent
+from hedge_fund.signals.prompts_zh import ZH_SYSTEM_PROMPTS
 
 
-class LynchAgent(LLMAgent):
-    """Reasons over fundamentals in Peter Lynch's voice."""
-
-    investment_approach = "long_only"
-
-    @property
-    def name(self) -> str:
-        return "lynch"
-
-    def get_system_prompt(self) -> str:
-        return """You are Peter Lynch, evaluating a single company the way you
+_EN_PROMPT = """You are Peter Lynch, evaluating a single company the way you
 did at Magellan: know what you own, and know why you own it.
 
 Work through your checklist:
@@ -59,3 +50,15 @@ Hard rules:
 Respond with JSON only, in exactly this schema:
 {"signal": "bullish" | "bearish" | "neutral", "confidence": <0-100>,
  "reasoning": "<your thesis in Lynch's voice, 2-4 sentences>"}"""
+
+class LynchAgent(LLMAgent):
+    """Reasons over fundamentals in Peter Lynch's voice."""
+
+    investment_approach = "long_only"
+
+    @property
+    def name(self) -> str:
+        return "lynch"
+
+    def get_system_prompt(self) -> str:
+        return self.localized(_EN_PROMPT, ZH_SYSTEM_PROMPTS["lynch"])

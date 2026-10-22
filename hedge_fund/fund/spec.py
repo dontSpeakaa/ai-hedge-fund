@@ -16,12 +16,15 @@ from pydantic import (
     ValidationError,
 )
 
+from hedge_fund.market import get_market, Market
 from hedge_fund.risk.limits import RiskLimits
 from hedge_fund.signals import ALPHA_MODEL_REGISTRY, LLMAgent, get_investment_approach
 from hedge_fund.signals.base import AlphaModel
 
 PortfolioMode: TypeAlias = Literal["long_only", "long_short", "dollar_neutral"]
 Cadence: TypeAlias = Literal["minute", "daily", "weekly", "monthly"]
+MarketId: TypeAlias = Literal["us", "cn"]
+Language: TypeAlias = Literal["en", "zh"]
 
 # The shortest interval a minute fund may run at: a session key is stamped
 # to the second, so one second is the finest bar there is. A snapshot round
@@ -162,6 +165,14 @@ class FundSpec(BaseModel):
         default_factory=TradingWindow,
         description="trading hours in New York time; read only when rebalance is minute",
     )
+    market: MarketId = Field(
+        default="us",
+        description="which market the mandate trades: us (USD, NY clock) or cn (A-shares, Shanghai clock)",
+    )
+    language: Language | None = Field(
+        default=None,
+        description="language the analysts reason in: en or zh; default follows the market",
+    )
     benchmark: str = Field(
         default="SPY",
         description="what the fund measures itself against; also the source " "of the backtest's trading-day grid",
@@ -170,7 +181,7 @@ class FundSpec(BaseModel):
     @field_validator("benchmark")
     @classmethod
     def _uppercase_benchmark(cls, ticker: str) -> str:
-        return ticker.upper()
+        return ticker.strip().upper()
 
     @field_validator("strategies")
     @classmethod
@@ -182,7 +193,25 @@ class FundSpec(BaseModel):
         return strategies
 
     @model_validator(mode="after")
+    def _benchmark_follows_the_market(self) -> FundSpec:
+        """Default the benchmark from the market, and spell it that market's way."""
+        market = self.market_config
+        if "benchmark" not in self.model_fields_set:
+            self.benchmark = market.default_benchmark
+        else:
+            try:
+                self.benchmark = market.normalize(self.benchmark)
+            except ValueError as exc:
+                raise ValueError(f"benchmark: {exc}") from None
+        return self
+
+    @model_validator(mode="after")
     def _interval_and_window_belong_to_minute_funds(self) -> FundSpec:
+        if self.market == "cn" and self.rebalance == "minute":
+            raise ValueError(
+                "rebalance: A-share minute funds are not supported yet — the session has a "
+                "midday break (11:30-13:00) that the bar grid does not model; use daily, weekly or monthly"
+            )
         if self.rebalance != "minute":
             stray = sorted({"interval", "window"} & self.model_fields_set)
             if stray:
@@ -200,14 +229,33 @@ class FundSpec(BaseModel):
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
-        """Daily/weekly/monthly mandates serialize exactly as they did before
-        minute funds existed: `interval` and `window` mean nothing to them,
-        and every ledger record carries a serialized spec in its hash."""
+        """Keep the serialized form stable across upgrades.
+
+        `interval` and `window` mean nothing to a daily fund, and a US
+        mandate that never chose a market or language is exactly the mandate
+        it was before those fields existed — ledger hashes must still verify.
+        Non-default values (an A-share mandate, an explicit language) are
+        always written.
+        """
         data = handler(self)
         if self.rebalance != "minute":
             data.pop("interval", None)
             data.pop("window", None)
+        if self.market == "us":
+            data.pop("market", None)
+        if self.language is None:
+            data.pop("language", None)
         return data
+
+    @property
+    def market_config(self) -> Market:
+        """The clock, currency, board lot and benchmark rules this mandate inherits."""
+        return get_market(self.market)
+
+    @property
+    def prompt_language(self) -> str:
+        """The language the analysts reason in: explicit, else the market's default."""
+        return self.language or self.market_config.default_language
 
     @property
     def is_intraday(self) -> bool:
@@ -242,16 +290,22 @@ def format_interval(seconds: int) -> str:
     return "".join(parts)
 
 
-def normalize_universe(tickers: list[str]) -> list[str]:
-    """Strip, uppercase, and deduplicate tickers while preserving their order.
+def normalize_universe(tickers: list[str], market: str = "us") -> list[str]:
+    """Canonicalize and deduplicate tickers while preserving their order.
+
+    *market* decides the spelling: US tickers are uppercased, A-share codes
+    gain their exchange suffix (600519 -> 600519.SH).
 
     Raise ValueError if no nonempty tickers remain.
     """
+    target = get_market(market)
     universe: list[str] = []
     for ticker in tickers:
-        upper = ticker.strip().upper()
-        if upper and upper not in universe:
-            universe.append(upper)
+        if not ticker.strip():
+            continue
+        normalized = target.normalize(ticker)
+        if normalized not in universe:
+            universe.append(normalized)
     if not universe:
         raise ValueError("universe is empty — a run needs at least one ticker")
     return universe
@@ -326,11 +380,28 @@ class Fund:
             if models is not None:
                 self.strategies.append((strategy, models[strategy.name]))
                 continue
-            staff = []
-            for m in strategy.models:
-                if m.name not in ALPHA_MODEL_REGISTRY:
-                    raise ValueError(f"unknown model {m.name!r} in strategy " f"{strategy.name!r}; available: {sorted(ALPHA_MODEL_REGISTRY)}")
-                cls = ALPHA_MODEL_REGISTRY[m.name]
-                params = {**m.params, "blind": True} if blind and issubclass(cls, LLMAgent) else m.params
-                staff.append(cls(**params))
+            staff = [build_alpha_model(spec, m, blind=blind) for m in strategy.models]
             self.strategies.append((strategy, staff))
+
+
+def build_alpha_model(spec: FundSpec, model: ModelSpec, *, blind: bool = False, llm=None) -> AlphaModel:
+    """Construct one signal model with the mandate's market and language.
+
+    LLM agents need the mandate's language and market because both change
+    the prompt; quant models ignore them. Defaults are not passed, so a
+    plain US mandate constructs its agents exactly as it always did.
+    """
+    if model.name not in ALPHA_MODEL_REGISTRY:
+        raise ValueError(f"unknown model {model.name!r}; available: {sorted(ALPHA_MODEL_REGISTRY)}")
+    cls = ALPHA_MODEL_REGISTRY[model.name]
+    params = dict(model.params)
+    if issubclass(cls, LLMAgent):
+        if llm is not None:
+            params["llm"] = llm
+        if spec.prompt_language != "en":
+            params["language"] = spec.prompt_language
+        if spec.market != "us":
+            params["market"] = spec.market
+        if blind:
+            params["blind"] = True
+    return cls(**params)

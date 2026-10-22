@@ -27,6 +27,7 @@ from hedge_fund.data.models import Price, PriceSnapshot
 from hedge_fund.data.protocol import DataClient
 from hedge_fund.data.sessions import completed_through, NEW_YORK, previous_day
 from hedge_fund.fund.spec import FundSpec, TradingWindow
+from hedge_fund.market import get_market, Market, US
 
 
 @dataclass(frozen=True)
@@ -57,27 +58,28 @@ class Clock(Protocol):
 
 
 class DailyClock:
-    """Today's behaviour, unchanged: sessions are completed NY dates."""
+    """Sessions are completed dates in the mandate's market."""
 
-    def __init__(self, data: DataClient) -> None:
+    def __init__(self, data: DataClient, market: str = "us") -> None:
         self._data = data
+        self._market = get_market(market)
 
     def is_complete(self, session: str) -> bool:
-        return session <= completed_through()
+        return session <= completed_through(self._market.id)
 
     def previous(self, session: str) -> str:
         return previous_day(session)
 
     def marks(self, tickers: list[str], session: str) -> Marked:
-        return Marked(prices=exact_marks(tickers, session, self._data))
+        return Marked(prices=exact_marks(tickers, session, self._data, self._market))
 
     def session_date(self, session: str) -> str:
         return session
 
 
-def exact_marks(tickers: list[str], session: str, data_client: DataClient) -> dict[str, float]:
+def exact_marks(tickers: list[str], session: str, data_client: DataClient, market: Market = US) -> dict[str, float]:
     """Require a finite, positive close for every name on the exact session."""
-    if session > completed_through():
+    if session > completed_through(market.id):
         raise ValueError(f"{session}: daily prices are not yet complete")
     marks: dict[str, float] = {}
     for ticker in sorted(set(tickers)):
@@ -207,7 +209,11 @@ def clock_for(spec: FundSpec, data: DataClient, *, live: bool = False) -> Clock:
     """The clock a mandate runs on: daily closes, or bars — historical for
     a backtest, live prints for the paper runner."""
     if not spec.is_intraday:
-        return DailyClock(data)
+        return DailyClock(data, spec.market)
+    if get_market(spec.market) != US:
+        # The bar grid is a single continuous New York window; an A-share day
+        # has a lunch break (11:30-13:00) and a different close (15:00).
+        raise ValueError(f"{spec.market}: minute funds are not supported yet")
     if live:
         return LiveClock(data, spec.interval_seconds, spec.window)
     return BarClock(data, spec.interval_seconds, spec.window)

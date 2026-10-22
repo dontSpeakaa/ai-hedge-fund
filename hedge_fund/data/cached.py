@@ -25,6 +25,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from hedge_fund.data.models import (
     CompanyFacts,
@@ -52,11 +53,23 @@ class CachedDataClient:
         cache_dir: Path | str = DEFAULT_CACHE_DIR,
         refresh: bool = False,
         live: bool = False,
+        timezone: ZoneInfo = NEW_YORK,
     ) -> None:
         self._client = client
         self._dir = Path(cache_dir)
         self._refresh = refresh
         self._live = live
+        # Freshness is decided in the market that produced the data: a
+        # Shanghai session is over hours before the New York date turns.
+        self._timezone = timezone
+
+    def __enter__(self) -> CachedDataClient:
+        return self
+
+    def __exit__(self, *args) -> None:
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            close()
 
     # ------------------------------------------------------------------
     # DataClient protocol
@@ -166,18 +179,18 @@ class CachedDataClient:
         if end is None:
             if not self._live:
                 return True
-        elif fetched.astimezone(NEW_YORK).date().isoformat() > end:
+        elif fetched.astimezone(self._timezone).date().isoformat() > end:
             return True
         elif daily_bar:
             return False
-        return (datetime.now(NEW_YORK) - fetched).total_seconds() < SAME_DAY_TTL
+        return (datetime.now(self._timezone) - fetched).total_seconds() < SAME_DAY_TTL
 
     def _cached_list(self, method: str, model_cls, params: dict, fetch: Callable) -> list:
         key = self._key(method, params)
         hit = self._read(key)
         if hit is not None and self._fresh(hit, method, params):
             return [model_cls(**row) for row in hit["data"]]
-        fetched_at = datetime.now(NEW_YORK).isoformat()
+        fetched_at = datetime.now(self._timezone).isoformat()
         result = fetch()
         self._write(key, {"data": [r.model_dump() for r in result], "fetched_at": fetched_at})
         return result
@@ -187,7 +200,7 @@ class CachedDataClient:
         hit = self._read(key)
         if hit is not None and self._fresh(hit, method, params):
             return model_cls(**hit["data"]) if hit["data"] is not None else None
-        fetched_at = datetime.now(NEW_YORK).isoformat()
+        fetched_at = datetime.now(self._timezone).isoformat()
         result = fetch()
         self._write(key, {"data": result.model_dump() if result is not None else None,
                           "fetched_at": fetched_at})
@@ -198,7 +211,7 @@ class CachedDataClient:
         hit = self._read(key)
         if hit is not None and self._fresh(hit, method, params):
             return hit["data"]
-        fetched_at = datetime.now(NEW_YORK).isoformat()
+        fetched_at = datetime.now(self._timezone).isoformat()
         result = fetch()
         self._write(key, {"data": result, "fetched_at": fetched_at})
         return result

@@ -11,19 +11,10 @@ it hunts for inflections in the fundamentals themselves.
 from __future__ import annotations
 
 from hedge_fund.signals.llm_agent import LLMAgent
+from hedge_fund.signals.prompts_zh import ZH_SYSTEM_PROMPTS
 
 
-class DruckenmillerAgent(LLMAgent):
-    """Reasons over fundamentals in Stanley Druckenmiller's voice."""
-
-    investment_approach = "long_short"
-
-    @property
-    def name(self) -> str:
-        return "druckenmiller"
-
-    def get_system_prompt(self) -> str:
-        return """You are Stanley Druckenmiller, evaluating a single company.
+_EN_PROMPT = """You are Stanley Druckenmiller, evaluating a single company.
 You don't care what a business looked like three years ago — you care what
 the trajectory looks like RIGHT NOW versus what everyone already believes.
 It's not whether you're right or wrong; it's how much you make when you're
@@ -63,3 +54,15 @@ Hard rules:
 Respond with JSON only, in exactly this schema:
 {"signal": "bullish" | "bearish" | "neutral", "confidence": <0-100>,
  "reasoning": "<your thesis in Druckenmiller's voice, 2-4 sentences>"}"""
+
+class DruckenmillerAgent(LLMAgent):
+    """Reasons over fundamentals in Stanley Druckenmiller's voice."""
+
+    investment_approach = "long_short"
+
+    @property
+    def name(self) -> str:
+        return "druckenmiller"
+
+    def get_system_prompt(self) -> str:
+        return self.localized(_EN_PROMPT, ZH_SYSTEM_PROMPTS["druckenmiller"])

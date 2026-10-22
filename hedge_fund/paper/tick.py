@@ -83,17 +83,18 @@ class RecordedClock:
         )
 
 
-def next_session(data_client: DataClient, benchmark: str, last_session: str | None) -> str | None:
+def next_session(data_client: DataClient, benchmark: str, last_session: str | None,
+                 market: str = "us") -> str | None:
     """The next session the fund owes: the first benchmark session after
     *last_session*, or — for a fund that has never ticked — the most recent
     completed one. None when nothing is due yet."""
-    end = completed_through()
+    end = completed_through(market)
     if last_session is None:
         start = (_date.fromisoformat(end) - timedelta(days=_FRESH_LOOKBACK_DAYS)).isoformat()
-        closes = session_closes(data_client, benchmark, start, end)
+        closes = session_closes(data_client, benchmark, start, end, market)
         return max(closes) if closes else None
     start = (_date.fromisoformat(last_session) + timedelta(days=1)).isoformat()
-    closes = session_closes(data_client, benchmark, start, end)
+    closes = session_closes(data_client, benchmark, start, end, market)
     return min(closes) if closes else None
 
 
@@ -140,7 +141,7 @@ def tick(
     if state.halted is not None:
         raise FundHalted(f"{deployed.name} is halted: {state.halted}")
 
-    due = next_session(data_client, deployed.spec.benchmark, state.last_session)
+    due = next_session(data_client, deployed.spec.benchmark, state.last_session, deployed.spec.market)
     if due is None:
         after = f"after {state.last_session}" if state.last_session else "yet"
         raise NothingDue(f"{deployed.name}: no completed {deployed.spec.benchmark} session {after}")

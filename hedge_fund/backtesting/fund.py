@@ -56,8 +56,9 @@ class ReplaySchedule(BaseModel):
         })
 
 
-def build_schedule(data: DataClient, benchmark: str, start: str, end: str, cadence: str) -> ReplaySchedule:
-    closes = session_closes(data, benchmark, start, end)
+def build_schedule(data: DataClient, benchmark: str, start: str, end: str, cadence: str,
+                   market: str = "us") -> ReplaySchedule:
+    closes = session_closes(data, benchmark, start, end, market)
     if not closes:
         raise ValueError(f"no {benchmark} bars in [{start}, {end}] — cannot build the trading grid")
     days = list(closes)
@@ -127,8 +128,8 @@ def backtest_fund(
     trading grid is an infrastructure problem, not an empty result.
     """
     spec = fund.spec
-    universe = normalize_universe(universe)
-    closes = session_closes(data_client, spec.benchmark, start, end)
+    universe = normalize_universe(universe, spec.market)
+    closes = session_closes(data_client, spec.benchmark, start, end, spec.market)
     if not closes:
         raise ValueError(
             f"{spec.name}: no {spec.benchmark} bars in [{start}, {end}] — "

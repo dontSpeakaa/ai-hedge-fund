@@ -308,3 +308,75 @@ def test_save_spec_round_trips_and_never_overwrites(tmp_path):
     with pytest.raises(FileExistsError):
         save_spec(spec, tmp_path / "mandates")
     assert load_spec(path) == spec
+
+
+CN_MINIMAL = {
+    **MINIMAL,
+    "name": "test-a-share-fund",
+    "market": "cn",
+    "strategies": [{"name": "value", "models": [{"name": "buffett"}], "blend": {"mode": "long_only"}}],
+}
+
+
+def test_a_share_market_defaults():
+    spec = FundSpec(**CN_MINIMAL)
+    assert spec.market == "cn"
+    assert spec.benchmark == "000300.SH"
+    assert spec.prompt_language == "zh"
+    assert spec.market_config.lot_size == 100
+    assert spec.market_config.currency == "CNY"
+
+
+def test_a_share_benchmark_is_spelled_the_market_way():
+    spec = FundSpec(**{**CN_MINIMAL, "benchmark": "sh000300"})
+    assert spec.benchmark == "000300.SH"
+
+
+def test_a_share_minute_funds_are_rejected():
+    with pytest.raises(ValidationError, match="minute funds are not supported"):
+        FundSpec(**{**CN_MINIMAL, "rebalance": "minute"})
+
+
+def test_language_overrides_the_market_default():
+    assert FundSpec(**{**CN_MINIMAL, "language": "en"}).prompt_language == "en"
+    assert FundSpec(**{**MINIMAL, "language": "zh"}).prompt_language == "zh"
+
+
+def test_us_defaults_serialize_exactly_as_before_the_market_field():
+    spec = FundSpec(**MINIMAL)
+    assert spec.market == "us"
+    assert spec.prompt_language == "en"
+    dumped = spec.model_dump()
+    assert "market" not in dumped
+    assert "language" not in dumped
+
+
+def test_a_share_serialization_keeps_market_and_language():
+    dumped = FundSpec(**{**CN_MINIMAL, "language": "zh"}).model_dump()
+    assert dumped["market"] == "cn"
+    assert dumped["language"] == "zh"
+    assert dumped["benchmark"] == "000300.SH"
+
+
+def test_a_share_universe_normalization_dedupes_and_infers_exchanges():
+    assert normalize_universe(["600519", "600519.SH", "000001"], "cn") == ["600519.SH", "000001.SZ"]
+    with pytest.raises(ValueError):
+        normalize_universe(["AAPL"], "cn")
+
+
+def test_a_share_market_and_language_reach_llm_agents(monkeypatch):
+    seen: dict = {}
+    for name, cls in ALPHA_MODEL_REGISTRY.items():
+        monkeypatch.setattr(cls, "__init__", lambda self, _name=name, **kwargs: seen.__setitem__(_name, kwargs))
+
+    Fund(FundSpec(**CN_MINIMAL))
+
+    assert seen["buffett"] == {"language": "zh", "market": "cn"}
+
+
+def test_a_share_mandate_round_trips_through_yaml(tmp_path):
+    path = save_spec(FundSpec(**CN_MINIMAL), tmp_path / "mandates")
+    loaded = load_spec(path)
+    assert loaded.market == "cn"
+    assert loaded.benchmark == "000300.SH"
+    assert loaded.prompt_language == "zh"

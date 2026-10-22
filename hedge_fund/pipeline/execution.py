@@ -18,12 +18,14 @@ def build_orders(
     positions: dict[str, Position],
     marks: dict[str, float],
     equity: float,
+    lot_size: int = 1,
 ) -> list[Order]:
     """Diff the target book against the broker's current book.
 
-    Sizing: target_shares = int(weight * equity / mark) — floor toward zero,
-    never overshoot the target; sub-share dust stays in cash and is
-    re-evaluated next cycle. Orders below one share are not emitted.
+    Sizing: target_shares = int(weight * equity / mark), then rounded down to
+    a whole board lot (`lot_size`; 100 for A-shares, 1 for US shares) — never
+    overshoot the target. Sub-lot dust stays in cash and is re-evaluated next
+    cycle. Orders below one share are not emitted.
 
     Ordering: all sells first, then buys, alphabetical within each group —
     deterministic, and sells free the cash that buys consume within the
@@ -32,12 +34,14 @@ def build_orders(
     A KeyError on marks here means a pipeline bug upstream (execute_decision
     prices every tradeable and held name before calling this) — let it raise.
     """
+    if not isinstance(lot_size, int) or lot_size < 1:
+        raise ValueError(f"lot_size must be a positive integer, got {lot_size!r}")
     sells: list[Order] = []
     buys: list[Order] = []
 
     for ticker in sorted(set(target_weights) | set(positions)):
         mark = marks[ticker]
-        target_shares = int(target_weights.get(ticker, 0.0) * equity / mark)
+        target_shares = int(int(target_weights.get(ticker, 0.0) * equity / mark) / lot_size) * lot_size
         current_shares = positions[ticker].shares if ticker in positions else 0
         delta = target_shares - current_shares
         if delta == 0:
